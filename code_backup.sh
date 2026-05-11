@@ -1,8 +1,8 @@
 #!/bin/bash
 
-
-EMAIL="arindam.das@maxbridgesolution.com"
 HOST=$(hostname)
+
+EMAILS="arindam.das@maxbridgesolution.com"
 
 BACKUP_BASE="/root/code_backups"
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
@@ -10,21 +10,23 @@ BACKUP_PATH="$BACKUP_BASE/$DATE"
 
 LOG_FILE="/var/log/code_backup.log"
 
-S3_BUCKET="s3://arindam-dev-backup/Code_backup"
-
 SRC_HOME="/home"
 SRC_WWW="/var/www/html"
-
 
 mkdir -p "$BACKUP_PATH"
 
 exec >> "$LOG_FILE" 2>&1
 
+echo "====================================="
 echo "Code Backup started at $(date)"
+echo "====================================="
 
 FAILED_ITEMS=()
 SUCCESS_ITEMS=()
 
+# =====================================
+# Backup /home users
+# =====================================
 
 echo "Processing /home users..."
 
@@ -71,6 +73,9 @@ do
 
 done
 
+# =====================================
+# Backup /var/www/html projects
+# =====================================
 
 echo "Processing /var/www/html..."
 
@@ -87,6 +92,9 @@ do
         --exclude='vendor' \
         --exclude='.git' \
         --exclude='.cache' \
+        --exclude='.npm' \
+        --exclude='.config' \
+        --exclude='.local' \
         --exclude='*.log' \
         -C "$SRC_WWW" "$NAME"
 
@@ -102,57 +110,85 @@ done
 
 echo "Compression completed"
 
+# =====================================
+# Delete backups older than 7 days
+# =====================================
 
-echo "Uploading to S3..."
-
-aws s3 cp "$BACKUP_PATH" "$S3_BUCKET/$DATE/" \
-    --recursive \
-    --storage-class STANDARD_IA \
-    --sse AES256
-
-if [ $? -eq 0 ]; then
-    echo "[OK] S3 Upload"
-else
-    echo "[FAILED] S3 Upload"
-    FAILED_ITEMS+=("S3_UPLOAD")
-fi
-
-
-find "$BACKUP_BASE" -type d -mtime +7 -exec rm -rf {} \;
+find "$BACKUP_BASE" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} \;
 
 echo "Old backups cleaned"
-
 
 TOTAL_SUCCESS=${#SUCCESS_ITEMS[@]}
 TOTAL_FAILED=${#FAILED_ITEMS[@]}
 
-SUBJECT="📦 Code Backup Report on $HOST"
+echo ""
+echo "Code Backup Summary"
+echo "Server: $HOST"
+echo "Backup Path: $BACKUP_PATH"
+echo "Date: $(date)"
+echo ""
 
-BODY="Code Backup Report\n"
-BODY="$BODY=================================\n"
-BODY="$BODY Server: $HOST\n"
-BODY="$BODY Date: $(date)\n\n"
+echo "Successful Backups ($TOTAL_SUCCESS):"
 
-BODY="$BODY Successful Backups ($TOTAL_SUCCESS):\n"
 for ITEM in "${SUCCESS_ITEMS[@]}"
 do
-    BODY="$BODY  ✔ $ITEM\n"
+    echo "  [OK] $ITEM"
 done
 
-BODY="$BODY\nFailed Backups ($TOTAL_FAILED):\n"
+echo ""
+
+echo "Failed Backups ($TOTAL_FAILED):"
+
 if [ $TOTAL_FAILED -eq 0 ]; then
-    BODY="$BODY  None 🎉\n"
+    echo "  None"
 else
     for ITEM in "${FAILED_ITEMS[@]}"
     do
-        BODY="$BODY  ✖ $ITEM\n"
+        echo "  [FAILED] $ITEM"
     done
 fi
 
-BODY="$BODY\nBackup Path: $BACKUP_PATH\n"
-BODY="$BODY S3 Location: $S3_BUCKET/$DATE/\n"
-BODY="$BODY Log File: $LOG_FILE\n"
-
-echo -e "$BODY" | mail -s "$SUBJECT" "$EMAIL"
-
+echo ""
 echo "Code backup finished at $(date)"
+
+# Mail Report
+
+MAIL_BODY=$(cat <<EOF
+Code Backup Summary
+
+Server: $HOST
+Date: $(date)
+
+Backup Location:
+$BACKUP_PATH
+
+
+Successful Backups ($TOTAL_SUCCESS):
+
+$(for ITEM in "${SUCCESS_ITEMS[@]}"
+do
+    echo "[OK] $ITEM"
+done)
+
+
+Failed Backups ($TOTAL_FAILED):
+
+$(if [ $TOTAL_FAILED -eq 0 ]; then
+    echo "None"
+else
+    for ITEM in "${FAILED_ITEMS[@]}"
+    do
+        echo "[FAILED] $ITEM"
+    done
+fi)
+
+
+Code backup finished at $(date)
+
+EOF
+)
+
+echo "$MAIL_BODY" | mail -s "Code Backup Report - $HOST" "$EMAILS"
+
+echo "Mail report sent"
+~
